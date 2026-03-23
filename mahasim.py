@@ -487,12 +487,7 @@ seed_text = st.text_area(
     "Seed (Marathi or English)",
     value=seed_examples.get(selected, ""),
     height=120,
-    placeholder="बातमी, प्रश्न, किंवा 'what if' scenario टाका...
-
-उदाहरणे:
-• शेतकरी: कांद्याचा भाव ₹२ किलो झाला
-• राजकारण: EVM बद्दल वाद सुरू
-• Timepass: जर पुणे capital झाले तर?",
+    placeholder="बातमी, प्रश्न, किंवा what if scenario टाका...",
     help="Enter news, question, or scenario to simulate"
 )
 
