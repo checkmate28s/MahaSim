@@ -300,123 +300,71 @@ def llm_call(client, model, messages, max_tokens=800, retries=3):
             return f"[Error: {err}]"
     return "[Error: Max retries reached]"
 
-# ─── Simulation Functions ────────────────────────────────────────────────────
-def generate_agents(client, model, persona_key, seed_text, n_agents=8):
+# ─── Simulation Functions (BATCHED — all rounds in ONE API call) ─────────────
+def run_full_simulation(client, model, persona_key, seed_text, n_agents, n_rounds):
+    """Single API call generates agents + all rounds + verdict. Saves ~80% of API quota."""
+    import re
     persona = PERSONAS[persona_key]
     agent_types_str = "\n".join([f"- {a}" for a in persona["agent_types"][:n_agents]])
-    
-    prompt = f"""You are building a Maharashtra social simulation.
 
-Context: {persona['system_context']}
+    prompt = f"""You are running a complete Maharashtra social simulation in ONE response.
 
-Seed news/scenario: {seed_text}
+PERSONA: {persona['marathi']} — {persona['system_context']}
+SEED: {seed_text}
 
-Create {n_agents} distinct agents from these types:
+STEP 1 — Create {n_agents} agents from these types:
 {agent_types_str}
 
-For each agent, respond in JSON array format:
-[
-  {{
-    "name": "Marathi name (realistic)",
-    "type": "agent type",
-    "location": "Maharashtra district/city",
-    "background": "2-line background in English",
-    "initial_opinion": "Their first reaction to the seed in Marathi (2-3 sentences)"
+STEP 2 — Simulate {n_rounds} rounds of discussion between agents.
+Each round: all agents respond to each other. Disagree, debate, challenge. Authentic Marathi dialect.
+
+STEP 3 — Write final verdict answering: {persona['verdict_prompt']}
+
+Respond ONLY as this JSON (no extra text):
+{{
+  "agents": [
+    {{
+      "name": "Authentic Maharashtra name ONLY like Ramesh Deshmukh, Sunita Patil — NO Korean/foreign names",
+      "type": "agent type from list",
+      "location": "Maharashtra district/city",
+      "background": "1-line background",
+      "initial_opinion": "First reaction in Marathi (2 sentences)"
+    }}
+  ],
+  "rounds": [
+    {{
+      "round": 1,
+      "messages": [
+        {{"name": "agent name", "message": "Marathi message (2-3 sentences)"}}
+      ]
+    }}
+  ],
+  "verdict": {{
+    "marathi": "Final verdict in Marathi (3-4 sentences)",
+    "english": "English summary (2 sentences)"
   }}
-]
+}}
 
-Make names authentic Maharashtra names. Keep initial_opinion in Marathi script."""
+CRITICAL: All agent names must be authentic Maharashtra Marathi names. All messages in Marathi script."""
 
-    response = llm_call(client, model, [{"role": "user", "content": prompt}], max_tokens=2000)
-    
-    # Clean JSON
-    import re
-    match = re.search(r'\[.*\]', response, re.DOTALL)
+    response = llm_call(client, model, [{"role": "user", "content": prompt}], max_tokens=4000)
+
+    # Parse JSON
+    match = re.search(r'\{.*\}', response, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())
         except:
             pass
-    
-    # Fallback
-    return [{"name": f"Agent {i+1}", "type": persona["agent_types"][i % len(persona["agent_types"])],
-             "location": "Maharashtra", "background": "", "initial_opinion": response[:200]} 
-            for i in range(n_agents)]
 
-def run_simulation_round(client, model, persona_key, agents, seed_text, round_num, history):
-    persona = PERSONAS[persona_key]
-    
-    # Build conversation history
-    history_str = ""
-    if history:
-        last_round = history[-1]
-        history_str = "Previous round:\n" + "\n".join([f"{m['name']}: {m['message']}" for m in last_round])
-    
-    agents_str = "\n".join([f"- {a['name']} ({a['type']}, {a['location']})" for a in agents])
-    
-    prompt = f"""Maharashtra simulation - Round {round_num}
-
-Context: {persona['system_context']}
-Seed: {seed_text}
-
-Agents: {agents_str}
-
-{history_str}
-
-Generate round {round_num} of discussion. Each agent responds to what others said.
-Agents disagree, agree, challenge each other. Make it realistic and dynamic.
-
-Respond as JSON array:
-[
-  {{
-    "name": "exact agent name from list",
-    "message": "What they say in Marathi (2-4 sentences, authentic dialect)"
-  }}
-]
-
-All messages MUST be in Marathi script. Make agents react to each other."""
-
-    response = llm_call(client, model, [{"role": "user", "content": prompt}], max_tokens=2000)
-    
-    import re
-    match = re.search(r'\[.*\]', response, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except:
-            pass
-    return []
-
-def generate_verdict(client, model, persona_key, seed_text, all_rounds):
-    persona = PERSONAS[persona_key]
-    
-    # Flatten all messages
-    all_messages = []
-    for round_data in all_rounds:
-        for msg in round_data:
-            all_messages.append(f"{msg['name']}: {msg['message']}")
-    
-    conversation = "\n".join(all_messages[-20:])  # Last 20 messages
-    
-    prompt = f"""You ran a Maharashtra social simulation.
-
-Persona: {persona['marathi']} ({persona_key})
-Seed: {seed_text}
-
-Final conversation:
-{conversation}
-
-{persona['verdict_prompt']}
-
-Write a clear, insightful verdict in BOTH:
-1. Marathi (3-4 sentences) - for the local audience
-2. English summary (2-3 sentences) - for the headline
-
-Format:
-MARATHI_VERDICT: [verdict in Marathi]
-ENGLISH_SUMMARY: [summary in English]"""
-
-    return llm_call(client, model, [{"role": "user", "content": prompt}], max_tokens=600)
+    # Fallback minimal structure
+    return {
+        "agents": [{"name": f"शेतकरी {i+1}", "type": persona["agent_types"][i % len(persona["agent_types"])],
+                    "location": "Maharashtra", "background": "", "initial_opinion": "सिम्युलेशन सुरू होत आहे..."} 
+                   for i in range(n_agents)],
+        "rounds": [{"round": 1, "messages": [{"name": "System", "message": response[:300]}]}],
+        "verdict": {"marathi": response[-300:], "english": "Simulation complete."}
+    }
 
 def parse_verdict(verdict_text):
     import re
@@ -530,7 +478,7 @@ seed_examples = {
     "🌾 Shetkari": "महाराष्ट्र सरकारने सोयाबीनचा हमीभाव ₹४,८९२ प्रति क्विंटल जाहीर केला. पण बाजारात फक्त ₹३,८०० मिळतोय.",
     "🏛️ Politician": "मनोज जरांगे यांनी मराठा आरक्षणासाठी पुन्हा उपोषण सुरू केले. विधानसभा निवडणुकीला ६ महिने बाकी आहेत.",
     "📣 Supporter": "उद्धव ठाकरेंनी जाहीर केले की ते पुढील निवडणुकीत स्वतंत्र लढणार, कोणाशीही युती नाही.",
-    "📰 Reporter": "पुण्यात एका मोठ्या IT कंपनीने ५,००० कर्मचाऱ्यांना काढून टाकले. बहुतेक महाराष्ट्रातील आहेत.",
+    "📰 Reporter": "पुण्यात एका मोठ्या IT कंपनीने ५,००० कर्मचाऱ्यांना काढून टाकले. बहुतेक महाराष्ट्रातील तरुण आहेत. कंपनीने कोणतेही कारण दिले नाही.",
     "🗳️ Voter": "लाडकी बहीण योजनेत पात्रता निकष बदलले. आता फक्त BPL कार्डधारकांनाच फायदा मिळणार.",
     "😄 Timepass": "जर सचिन तेंडुलकर महाराष्ट्राचे मुख्यमंत्री झाले तर काय होईल?"
 }
@@ -539,7 +487,12 @@ seed_text = st.text_area(
     "Seed (Marathi or English)",
     value=seed_examples.get(selected, ""),
     height=120,
-    placeholder="बातमी, प्रश्न, किंवा 'what if' scenario टाका...",
+    placeholder="बातमी, प्रश्न, किंवा 'what if' scenario टाका...
+
+उदाहरणे:
+• शेतकरी: कांद्याचा भाव ₹२ किलो झाला
+• राजकारण: EVM बद्दल वाद सुरू
+• Timepass: जर पुणे capital झाले तर?",
     help="Enter news, question, or scenario to simulate"
 )
 
@@ -583,96 +536,87 @@ if run_sim:
         <div class="stat-num">⚙️</div>
         <div class="stat-label">Building agents...</div></div>""", unsafe_allow_html=True)
     
-    # Phase 1: Generate Agents
-    with st.spinner("🤖 Agents तयार होत आहेत..."):
-        agents = generate_agents(client, model, selected, seed_text, n_agents)
-    
+    # ── SINGLE BATCHED API CALL — agents + rounds + verdict in one shot ──
+    status_metric.markdown('''<div class="stat-box">
+        <div class="stat-num">⚙️</div>
+        <div class="stat-label">Simulating...</div></div>''', unsafe_allow_html=True)
+
+    with st.spinner("🌾 Maharashtra simulation चालू आहे... (1 API call)"):
+        result = run_full_simulation(client, model, selected, seed_text, n_agents, n_rounds)
+
+    agents   = result.get("agents", [])
+    rounds   = result.get("rounds", [])
+    verdict  = result.get("verdict", {})
+    total_messages = sum(len(r.get("messages", [])) for r in rounds)
+
+    # Update stats
+    agents_metric.markdown(f'''<div class="stat-box">
+        <div class="stat-num">{len(agents)}</div>
+        <div class="stat-label">Agents</div></div>''', unsafe_allow_html=True)
+    rounds_metric.markdown(f'''<div class="stat-box">
+        <div class="stat-num">{len(rounds)}</div>
+        <div class="stat-label">Rounds</div></div>''', unsafe_allow_html=True)
+    messages_metric.markdown(f'''<div class="stat-box">
+        <div class="stat-num">{total_messages}</div>
+        <div class="stat-label">Messages</div></div>''', unsafe_allow_html=True)
+    status_metric.markdown('''<div class="stat-box">
+        <div class="stat-num">✅</div>
+        <div class="stat-label">Done!</div></div>''', unsafe_allow_html=True)
+
     # Show agents
     st.markdown("### 🧑‍🤝‍🧑 Simulation Agents")
-    agent_cols = st.columns(min(n_agents, 4))
+    agent_cols = st.columns(min(len(agents), 4))
     for i, agent in enumerate(agents):
         with agent_cols[i % len(agent_cols)]:
             st.markdown(f"""
-            <div style="background:white; border-radius:10px; padding:0.8rem; 
+            <div style="background:white; border-radius:10px; padding:0.8rem;
                         margin-bottom:0.5rem; border-top:3px solid #FF6B1A;
                         box-shadow:0 2px 8px rgba(0,0,0,0.05);">
                 <div style="font-weight:700; color:#1A1A2E">{agent.get('name','Agent')}</div>
                 <div style="font-size:0.75rem; color:#FF6B1A">{agent.get('type','')}</div>
                 <div style="font-size:0.7rem; color:#888">📍 {agent.get('location','')}</div>
                 <div style="font-size:0.8rem; margin-top:0.5rem; font-style:italic; color:#555">
-                    {agent.get('background','')[:80]}...</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
+                    {agent.get('background','')[:80]}</div>
+            </div>""", unsafe_allow_html=True)
+
     # Show initial opinions
     st.markdown("### 💬 Initial Reactions")
     for agent in agents:
         if agent.get('initial_opinion'):
             st.markdown(f"""
             <div class="agent-bubble">
-                <div class="agent-name">{agent.get('name','')} 
+                <div class="agent-name">{agent.get('name','')}
                     <span class="agent-role">— {agent.get('type','')} ({agent.get('location','')})</span>
                 </div>
                 <div class="agent-text">{agent.get('initial_opinion','')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Phase 2: Simulation Rounds
+            </div>""", unsafe_allow_html=True)
+
+    # Show rounds
     st.markdown("### 🔄 Simulation Rounds")
-    all_rounds = []
-    total_messages = len(agents)
-    
-    for round_num in range(1, n_rounds + 1):
-        status_metric.markdown(f"""<div class="stat-box">
-            <div class="stat-num">R{round_num}</div>
-            <div class="stat-label">Running...</div></div>""", unsafe_allow_html=True)
-        
-        with st.spinner(f"Round {round_num} of {n_rounds} चालू आहे..."):
-            round_messages = run_simulation_round(
-                client, model, selected, agents, seed_text, round_num, all_rounds
-            )
-        
-        all_rounds.append(round_messages)
-        total_messages += len(round_messages)
-        
-        messages_metric.markdown(f"""<div class="stat-box">
-            <div class="stat-num">{total_messages}</div>
-            <div class="stat-label">Messages</div></div>""", unsafe_allow_html=True)
-        
-        st.markdown(f"""<div class="round-header">⚡ Round {round_num} / {n_rounds}</div>""", 
+    for round_data in rounds:
+        rnum = round_data.get("round", "")
+        st.markdown(f'<div class="round-header">⚡ Round {rnum} / {len(rounds)}</div>',
                    unsafe_allow_html=True)
-        
-        for msg in round_messages:
-            # Find agent details
+        for msg in round_data.get("messages", []):
             agent_info = next((a for a in agents if a.get('name') == msg.get('name')), {})
             st.markdown(f"""
             <div class="agent-bubble">
-                <div class="agent-name">{msg.get('name','')} 
+                <div class="agent-name">{msg.get('name','')}
                     <span class="agent-role">— {agent_info.get('type','')} ({agent_info.get('location','')})</span>
                 </div>
                 <div class="agent-text">{msg.get('message','')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Phase 3: Verdict
-    status_metric.markdown(f"""<div class="stat-box">
-        <div class="stat-num">✅</div>
-        <div class="stat-label">Done!</div></div>""", unsafe_allow_html=True)
-    
+            </div>""", unsafe_allow_html=True)
+
+    # Verdict
     st.markdown("### 🏆 Final Verdict")
-    with st.spinner("Verdict तयार होत आहे..."):
-        verdict_raw = generate_verdict(client, model, selected, seed_text, all_rounds)
-    
-    marathi_verdict, english_summary = parse_verdict(verdict_raw)
-    
-    english_part = f'<hr style="border-color:rgba(255,255,255,0.2); margin:1rem 0"><div style="opacity:0.85; font-size:0.9rem">{english_summary}</div>' if english_summary else ''
-    st.markdown(f"""
-    <div class="verdict-box">
-        <h3>🎯 Simulation Verdict</h3>
-        <div class="verdict-text">{marathi_verdict}</div>
-        {english_part}
-    </div>
-    """, unsafe_allow_html=True)
+    import re as _re
+    marathi_verdict = _re.sub(r'<[^>]+>', '', verdict.get("marathi", "")).strip()
+    english_summary = _re.sub(r'<[^>]+>', '', verdict.get("english", "")).strip()
+    st.markdown('<div class="verdict-box"><h3>🎯 Simulation Verdict</h3>', unsafe_allow_html=True)
+    st.markdown(f'<div class="verdict-text">{marathi_verdict}</div>', unsafe_allow_html=True)
+    if english_summary:
+        st.markdown(f'<div style="color:white;opacity:0.85;font-size:0.95rem;margin-top:1rem">{english_summary}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     
     # Share text
     st.markdown("### 📤 WhatsApp वर शेअर करा")
