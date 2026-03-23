@@ -281,17 +281,24 @@ PERSONAS = {
 def get_client(api_key, base_url):
     return OpenAI(api_key=api_key, base_url=base_url)
 
-def llm_call(client, model, messages, max_tokens=800):
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.85
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"[Error: {str(e)}]"
+def llm_call(client, model, messages, max_tokens=800, retries=3):
+    for attempt in range(retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.85
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            err = str(e)
+            if "429" in err and attempt < retries - 1:
+                wait = (attempt + 1) * 8
+                time.sleep(wait)
+                continue
+            return f"[Error: {err}]"
+    return "[Error: Max retries reached]"
 
 # ─── Simulation Functions ────────────────────────────────────────────────────
 def generate_agents(client, model, persona_key, seed_text, n_agents=8):
@@ -645,12 +652,12 @@ if run_sim:
     
     marathi_verdict, english_summary = parse_verdict(verdict_raw)
     
+    english_part = f'<hr style="border-color:rgba(255,255,255,0.2); margin:1rem 0"><div style="opacity:0.85; font-size:0.9rem">{english_summary}</div>' if english_summary else ''
     st.markdown(f"""
     <div class="verdict-box">
         <h3>🎯 Simulation Verdict</h3>
         <div class="verdict-text">{marathi_verdict}</div>
-        {f'<hr style="border-color:rgba(255,255,255,0.2); margin:1rem 0">' if english_summary else ''}
-        <div style="opacity:0.85; font-size:0.9rem">{english_summary}</div>
+        {english_part}
     </div>
     """, unsafe_allow_html=True)
     
