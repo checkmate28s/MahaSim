@@ -419,33 +419,46 @@ ENGLISH_SUMMARY: [summary in English]"""
     return llm_call(client, model, [{"role": "user", "content": prompt}], max_tokens=600)
 
 def parse_verdict(verdict_text):
-    marathi = ""
-    english = ""
-    lines = verdict_text.split('\n')
-    for line in lines:
-        if line.startswith("MARATHI_VERDICT:"):
-            marathi = line.replace("MARATHI_VERDICT:", "").strip()
-        elif line.startswith("ENGLISH_SUMMARY:"):
-            english = line.replace("ENGLISH_SUMMARY:", "").strip()
-    if not marathi and not english:
-        return verdict_text, ""
+    import re
+    # Remove stray HTML tags
+    verdict_text = re.sub(r'</?\w+>', '', verdict_text).strip()
+
+    m_match = re.search(r'MARATHI_VERDICT[:\s]+(.*?)(?=ENGLISH_SUMMARY|$)', verdict_text, re.DOTALL | re.IGNORECASE)
+    e_match = re.search(r'ENGLISH_SUMMARY[:\s]+(.*?)$', verdict_text, re.DOTALL | re.IGNORECASE)
+
+    marathi = m_match.group(1).strip() if m_match else ""
+    english = e_match.group(1).strip() if e_match else ""
+
+    if not marathi:
+        # Fallback: show full text, no english section
+        cleaned = re.sub(r'(MARATHI_VERDICT|ENGLISH_SUMMARY)[:\s]*', '', verdict_text).strip()
+        return cleaned, ""
+
     return marathi, english
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
+# Load API key from Streamlit secrets if available
+_default_key = ""
+_default_model = "google/gemma-3n-e2b-it:free"
+try:
+    _default_key = st.secrets.get("OPENROUTER_API_KEY", "") or st.secrets.get("api_key", "")
+except:
+    pass
+
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
-    
-    api_key = st.text_input("API Key", type="password", 
-                             placeholder="sk-or-... / AIza...",
-                             help="OpenRouter or Gemini API key")
-    
+
+    api_key = st.text_input("API Key", value=_default_key, type="password",
+                             placeholder="sk-or-...",
+                             help="OpenRouter API key")
+
     base_url = st.selectbox("API Provider", [
         "https://openrouter.ai/api/v1",
         "https://generativelanguage.googleapis.com/v1beta/openai/",
         "https://api.openai.com/v1"
     ])
-    
-    model = st.text_input("Model", value="google/gemini-2.0-flash:free",
+
+    model = st.text_input("Model", value=_default_model,
                            help="Model name for your provider")
     
     st.divider()
